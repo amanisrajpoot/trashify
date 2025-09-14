@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: trashify-postgres
+    environment:
+      POSTGRES_DB: trashify
+      POSTGRES_USER: trashify_user
+      POSTGRES_PASSWORD: trashify_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - trashify-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: trashify-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - trashify-network
+
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trashify-backend
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://trashify_user:trashify_password@postgres:5432/trashify
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=your_super_secret_jwt_key_here
+      - JWT_REFRESH_SECRET=your_super_secret_refresh_key_here
+      - RAZORPAY_KEY_ID=your_razorpay_key_id
+      - RAZORPAY_KEY_SECRET=your_razorpay_key_secret
+      - GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+      - FCM_SERVER_KEY=your_fcm_server_key
+      - FCM_PROJECT_ID=your_fcm_project_id
+      - AWS_ACCESS_KEY_ID=your_aws_access_key
+      - AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+      - AWS_REGION=ap-south-1
+      - AWS_S3_BUCKET=trashify-uploads
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - trashify-network
+    volumes:
+      - ./uploads:/app/uploads
+
+  # Admin Dashboard
+  admin-dashboard:
+    build:
+      context: ./admin-dashboard
+      dockerfile: Dockerfile
+    container_name: trashify-admin
+    environment:
+      - REACT_APP_API_URL=http://backend:3000/api
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+    networks:
+      - trashify-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: trashify-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - admin-dashboard
+    networks:
+      - trashify-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  trashify-network:
+    driver: bridge
