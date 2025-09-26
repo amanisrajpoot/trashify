@@ -13,10 +13,13 @@ const paymentRoutes = require('./routes/payments');
 const materialRoutes = require('./routes/materials');
 const notificationRoutes = require('./routes/notifications');
 const adminRoutes = require('./routes/admin');
+const reviewRoutes = require('./routes/reviews');
+const messageRoutes = require('./routes/messages');
 
 const errorHandler = require('./middleware/errorHandler');
 const { connectDatabase } = require('./config/database');
 const { connectRedis } = require('./config/redis');
+const realtimeService = require('./services/realtimeService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -65,6 +68,8 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/messages', messageRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -89,10 +94,13 @@ async function startServer() {
     console.log('✅ Redis connected successfully');
     
     // Start server
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📱 Environment: ${process.env.NODE_ENV}`);
     });
+
+    // Initialize Socket.io
+    realtimeService.initialize(server);
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);

@@ -1,155 +1,116 @@
 const express = require('express');
-const Joi = require('joi');
-const { db } = require('../config/database');
-const { auth, authorize } = require('../middleware/auth');
-const { sendNotification } = require('../services/notificationService');
-
 const router = express.Router();
+const bookingService = require('../services/bookingService');
+const { auth } = require('../middleware/auth');
 
-// Validation schemas
-const createBookingSchema = Joi.object({
-  pickup_address: Joi.object({
-    street: Joi.string().required(),
-    city: Joi.string().required(),
-    state: Joi.string().required(),
-    pincode: Joi.string().pattern(/^\d{6}$/).required(),
-    latitude: Joi.number().required(),
-    longitude: Joi.number().required(),
-    landmark: Joi.string().optional()
-  }).required(),
-  materials: Joi.array().items(
-    Joi.object({
-      material_id: Joi.string().uuid().required(),
-      estimated_weight: Joi.number().positive().required(),
-      description: Joi.string().optional()
-    })
-  ).min(1).required(),
-  scheduled_at: Joi.date().greater('now').required(),
-  special_instructions: Joi.string().max(500).optional()
-});
-
-const updateBookingSchema = Joi.object({
-  status: Joi.string().valid('cancelled').optional(),
-  special_instructions: Joi.string().max(500).optional()
-});
-
-// Create booking
-router.post('/', auth, authorize('customer'), async (req, res) => {
+// Create a new booking
+router.post('/', auth, async (req, res) => {
   try {
-    const { error, value } = createBookingSchema.validate(req.body);
-    if (error) {
+    // Basic validation
+    const { pickup_address, latitude, longitude, city, state, pincode, preferred_pickup_date, time_slot, materials } = req.body;
+    
+    if (!pickup_address || !latitude || !longitude || !city || !state || !pincode || !preferred_pickup_date || !time_slot || !materials || !Array.isArray(materials) || materials.length === 0) {
       return res.status(400).json({
         success: false,
-        message: error.details[0].message
+        message: 'Missing required fields'
       });
     }
 
-    const { pickup_address, materials, scheduled_at, special_instructions } = value;
+    const bookingData = {
+      ...req.body,
+      customer_id: req.user.id
+    };
 
-    // Calculate estimated value
-    let estimatedValue = 0;
-    for (const material of materials) {
-      const materialData = await db('materials')
-        .select('price_per_kg')
-        .where('id', material.material_id)
-        .where('is_active', true)
-        .first();
+    const result = await bookingService.createBooking(bookingData);
 
-      if (!materialData) {
-        return res.status(400).json({
-          success: false,
-          message: `Material with ID ${material.material_id} not found or inactive`
-        });
-      }
-
-      estimatedValue += materialData.price_per_kg * material.estimated_weight;
-    }
-
-    // Create booking
-    const [booking] = await db('bookings')
-      .insert({
-        customer_id: req.user.id,
-        pickup_address: JSON.stringify(pickup_address),
-        materials: JSON.stringify(materials),
-        estimated_value: estimatedValue,
-        scheduled_at,
-        special_instructions
-      })
-      .returning('*');
-
-    // Find available collectors nearby
-    const availableCollectors = await db('collector_locations')
-      .select('collector_id', 'latitude', 'longitude')
-      .where('status', 'available')
-      .where('last_updated', '>', db.raw("NOW() - INTERVAL '30 minutes'"));
-
-    // Send notifications to nearby collectors
-    for (const collector of availableCollectors) {
-      await sendNotification(collector.collector_id, {
-        title: 'New Pickup Request',
-        message: `New pickup request near your location. Estimated value: ₹${estimatedValue}`,
-        type: 'booking',
-        data: { booking_id: booking.id }
+    if (result.success) {
+      res.status(201).json({
+        success: true,
+        message: 'Booking created successfully',
+        booking: result.booking
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
       });
     }
-
-    res.status(201).json({
-      success: true,
-      message: 'Booking created successfully',
-      data: { booking }
-    });
   } catch (error) {
     console.error('Create booking error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to create booking'
     });
   }
 });
 
-// Get user bookings
-router.get('/', auth, async (req, res) => {
+// Get customer bookings
+router.get('/my-bookings', auth, async (req, res) => {
   try {
-    const { status, page = 1, limit = 10 } = req.query;
-    const offset = (page - 1) * limit;
+    const { status, limit = 20, offset = 0 } = req.query;
+    
+    const result = await bookingService.getCustomerBookings(
+      req.user.id,
+      status,
+      parseInt(limit),
+      parseInt(offset)
+    );
 
-    let query = db('bookings')
-      .select('*')
-      .where('customer_id', req.user.id)
-      .orderBy('created_at', 'desc')
-      .limit(limit)
-      .offset(offset);
-
-    if (status) {
-      query = query.where('status', status);
+    if (result.success) {
+      res.json({
+        success: true,
+        bookings: result.bookings
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
+      });
     }
-
-    const bookings = await query;
-
-    // Get total count
-    let countQuery = db('bookings').where('customer_id', req.user.id);
-    if (status) {
-      countQuery = countQuery.where('status', status);
-    }
-    const total = await countQuery.count('* as count').first();
-
-    res.json({
-      success: true,
-      data: {
-        bookings,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: parseInt(total.count),
-          pages: Math.ceil(total.count / limit)
-        }
-      }
-    });
   } catch (error) {
-    console.error('Get bookings error:', error);
+    console.error('Get customer bookings error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to get bookings'
+    });
+  }
+});
+
+// Get collector bookings
+router.get('/collector-bookings', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'collector') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Collector role required.'
+      });
+    }
+
+    const { status, limit = 20, offset = 0 } = req.query;
+    
+    const result = await bookingService.getCollectorBookings(
+      req.user.id,
+      status,
+      parseInt(limit),
+      parseInt(offset)
+    );
+
+    if (result.success) {
+      res.json({
+        success: true,
+        bookings: result.bookings
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('Get collector bookings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get bookings'
     });
   }
 });
@@ -158,232 +119,382 @@ router.get('/', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
+    
+    const result = await bookingService.getBookingById(id);
 
-    const booking = await db('bookings')
-      .select('*')
-      .where('id', id)
-      .where(function() {
-        this.where('customer_id', req.user.id)
-            .orWhere('collector_id', req.user.id);
-      })
-      .first();
+    if (result.success) {
+      // Check if user has access to this booking
+      const booking = result.booking;
+      if (booking.customer_id !== req.user.id && 
+          booking.collector_id !== req.user.id && 
+          req.user.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied'
+        });
+      }
 
-    if (!booking) {
-      return res.status(404).json({
+      res.json({
+        success: true,
+        booking
+      });
+    } else {
+      res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('Get booking by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get booking'
+    });
+  }
+});
+
+// Update booking status
+router.patch('/:id/status', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    
+    if (!status || !['pending', 'assigned', 'in_progress', 'completed', 'cancelled'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid status is required'
+      });
+    }
+    
+    const result = await bookingService.updateBookingStatus(
+      id,
+      status,
+      req.user.id,
+      req.user.role,
+      notes
+    );
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Booking status updated successfully',
+        booking: result.booking
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('Update booking status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update booking status'
+    });
+  }
+});
+
+// Assign collector to booking (Admin only)
+router.post('/:id/assign', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin role required.'
       });
     }
 
+    const { id } = req.params;
+    const { collector_id } = req.body;
+    
+    if (!collector_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Collector ID is required'
+      });
+    }
+    
+    const result = await bookingService.assignCollector(id, collector_id, req.user.id);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: result.message
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('Assign collector error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign collector'
+    });
+  }
+});
+
+// Cancel booking
+router.post('/:id/cancel', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    
+    if (!reason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cancellation reason is required'
+      });
+    }
+    
+    const result = await bookingService.cancelBooking(
+      id,
+      req.user.id,
+      req.user.role,
+      reason
+    );
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Booking cancelled successfully',
+        booking: result.booking
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('Cancel booking error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel booking'
+    });
+  }
+});
+
+// Get all bookings (Admin only)
+router.get('/', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin role required.'
+      });
+    }
+
+    const { status, limit = 50, offset = 0 } = req.query;
+    
+    const db = require('../config/database');
+    let query = db('bookings')
+      .leftJoin('users as customers', 'bookings.customer_id', 'customers.id')
+      .leftJoin('users as collectors', 'bookings.collector_id', 'collectors.id')
+      .select(
+        'bookings.*',
+        'customers.name as customer_name',
+        'customers.phone as customer_phone',
+        'collectors.name as collector_name',
+        'collectors.phone as collector_phone'
+      );
+
+    if (status) {
+      query = query.where('bookings.status', status);
+    }
+
+    const bookings = await query
+      .orderBy('bookings.created_at', 'desc')
+      .limit(parseInt(limit))
+      .offset(parseInt(offset));
+
     res.json({
       success: true,
-      data: { booking }
+      bookings
     });
+
+  } catch (error) {
+    console.error('Get all bookings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get bookings'
+    });
+  }
+});
+
+// Get booking by ID
+router.get('/:id', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await bookingService.getBookingById(id, req.user.id, req.user.role);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        booking: result.booking
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: result.message
+      });
+    }
   } catch (error) {
     console.error('Get booking error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to get booking'
     });
   }
 });
 
-// Update booking
+// Update booking details
 router.put('/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { error, value } = updateBookingSchema.validate(req.body);
+    const updateData = req.body;
     
-    if (error) {
-      return res.status(400).json({
+    const result = await bookingService.updateBookingDetails(id, updateData, req.user.id, req.user.role);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Booking updated successfully',
+        booking: result.booking
+      });
+    } else {
+      res.status(400).json({
         success: false,
-        message: error.details[0].message
+        message: result.message
       });
     }
-
-    // Check if booking exists and user has permission
-    const booking = await db('bookings')
-      .select('*')
-      .where('id', id)
-      .where(function() {
-        this.where('customer_id', req.user.id)
-            .orWhere('collector_id', req.user.id);
-      })
-      .first();
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    // Check if booking can be updated
-    if (booking.status === 'completed' || booking.status === 'cancelled') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot update completed or cancelled booking'
-      });
-    }
-
-    // Update booking
-    const [updatedBooking] = await db('bookings')
-      .where('id', id)
-      .update({
-        ...value,
-        updated_at: new Date()
-      })
-      .returning('*');
-
-    // Send notification to other party
-    const otherUserId = booking.customer_id === req.user.id ? booking.collector_id : booking.customer_id;
-    if (otherUserId) {
-      await sendNotification(otherUserId, {
-        title: 'Booking Updated',
-        message: `Booking #${id} has been updated`,
-        type: 'booking',
-        data: { booking_id: id }
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Booking updated successfully',
-      data: { booking: updatedBooking }
-    });
   } catch (error) {
     console.error('Update booking error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to update booking'
     });
   }
 });
 
-// Accept booking (for collectors)
-router.post('/:id/accept', auth, authorize('collector'), async (req, res) => {
+// Cancel booking
+router.delete('/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
+    
+    const result = await bookingService.cancelBooking(id, req.user.id, req.user.role);
 
-    const booking = await db('bookings')
-      .where('id', id)
-      .where('status', 'pending')
-      .first();
-
-    if (!booking) {
-      return res.status(404).json({
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Booking cancelled successfully'
+      });
+    } else {
+      res.status(400).json({
         success: false,
-        message: 'Booking not found or not available'
+        message: result.message
       });
     }
-
-    // Update booking
-    const [updatedBooking] = await db('bookings')
-      .where('id', id)
-      .update({
-        collector_id: req.user.id,
-        status: 'accepted',
-        updated_at: new Date()
-      })
-      .returning('*');
-
-    // Send notification to customer
-    await sendNotification(booking.customer_id, {
-      title: 'Booking Accepted',
-      message: 'Your pickup request has been accepted by a collector',
-      type: 'booking',
-      data: { booking_id: id }
-    });
-
-    res.json({
-      success: true,
-      message: 'Booking accepted successfully',
-      data: { booking: updatedBooking }
-    });
   } catch (error) {
-    console.error('Accept booking error:', error);
+    console.error('Cancel booking error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to cancel booking'
     });
   }
 });
 
-// Complete booking (for collectors)
-router.post('/:id/complete', auth, authorize('collector'), async (req, res) => {
+// Add material to booking
+router.post('/:id/materials', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { actual_materials, images } = req.body;
-
-    const booking = await db('bookings')
-      .where('id', id)
-      .where('collector_id', req.user.id)
-      .where('status', 'in_progress')
-      .first();
-
-    if (!booking) {
-      return res.status(404).json({
+    const { material_id, quantity } = req.body;
+    
+    if (!material_id || !quantity) {
+      return res.status(400).json({
         success: false,
-        message: 'Booking not found or not in progress'
+        message: 'Material ID and quantity are required'
       });
     }
+    
+    const result = await bookingService.addBookingMaterial(id, material_id, quantity, req.user.id);
 
-    // Calculate actual value
-    let actualValue = 0;
-    for (const material of actual_materials) {
-      const materialData = await db('materials')
-        .select('price_per_kg')
-        .where('id', material.material_id)
-        .first();
-
-      actualValue += materialData.price_per_kg * material.weight;
-    }
-
-    // Update booking
-    const [updatedBooking] = await db('bookings')
-      .where('id', id)
-      .update({
-        status: 'completed',
-        actual_value: actualValue,
-        picked_up_at: new Date(),
-        images: JSON.stringify(images),
-        updated_at: new Date()
-      })
-      .returning('*');
-
-    // Create inventory records
-    for (const material of actual_materials) {
-      await db('inventory').insert({
-        booking_id: id,
-        material_id: material.material_id,
-        collector_id: req.user.id,
-        weight: material.weight,
-        price_per_kg: material.price_per_kg,
-        total_value: material.weight * material.price_per_kg,
-        condition: material.condition || 'good',
-        notes: material.notes,
-        images: JSON.stringify(material.images || [])
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Material added successfully',
+        booking: result.booking
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
       });
     }
-
-    // Send notification to customer
-    await sendNotification(booking.customer_id, {
-      title: 'Pickup Completed',
-      message: `Your pickup has been completed. Amount: ₹${actualValue}`,
-      type: 'payment',
-      data: { booking_id: id, amount: actualValue }
-    });
-
-    res.json({
-      success: true,
-      message: 'Booking completed successfully',
-      data: { booking: updatedBooking }
-    });
   } catch (error) {
-    console.error('Complete booking error:', error);
+    console.error('Add material error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to add material'
+    });
+  }
+});
+
+// Remove material from booking
+router.delete('/:id/materials/:materialId', auth, async (req, res) => {
+  try {
+    const { id, materialId } = req.params;
+    
+    const result = await bookingService.removeBookingMaterial(id, materialId, req.user.id);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Material removed successfully',
+        booking: result.booking
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('Remove material error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to remove material'
+    });
+  }
+});
+
+// Get booking materials
+router.get('/:id/materials', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await bookingService.getBookingMaterials(id, req.user.id);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        materials: result.materials
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('Get booking materials error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get booking materials'
     });
   }
 });

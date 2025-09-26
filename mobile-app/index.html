@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trashify Mobile App - Web Preview</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            min-height: 100vh;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: #2E7D32;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .content {
+            padding: 20px;
+        }
+        .screen {
+            display: none;
+        }
+        .screen.active {
+            display: block;
+        }
+        .title {
+            font-size: 28px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .input {
+            width: 100%;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .button {
+            width: 100%;
+            background: #2E7D32;
+            color: white;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background: #1B5E20;
+        }
+        .button.secondary {
+            background: transparent;
+            color: #2E7D32;
+            border: 2px solid #2E7D32;
+        }
+        .button.secondary:hover {
+            background: #2E7D32;
+            color: white;
+        }
+        .button.logout {
+            background: #d32f2f;
+        }
+        .button.logout:hover {
+            background: #b71c1c;
+        }
+        .link {
+            color: #2E7D32;
+            text-align: center;
+            text-decoration: underline;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .menu-button {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+            text-align: center;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .menu-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        .menu-button-text {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        .description {
+            color: #888;
+            line-height: 1.5;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="title">🗑️ Trashify</div>
+            <div class="subtitle">Home Pickup Service for Recyclable Waste</div>
+        </div>
+        
+        <div class="content">
+            <!-- Welcome Screen -->
+            <div id="welcome" class="screen active">
+                <div class="description">
+                    Book a pickup for your recyclable waste and earn money! 
+                    This is a web preview of the mobile app.
+                </div>
+                <button class="button" onclick="showScreen('login')">Login</button>
+                <button class="button secondary" onclick="showScreen('register')">Register</button>
+            </div>
+
+            <!-- Login Screen -->
+            <div id="login" class="screen">
+                <div class="title">Login</div>
+                <input type="tel" class="input" placeholder="Phone Number" id="loginPhone">
+                <input type="password" class="input" placeholder="Password" id="loginPassword">
+                <button class="button" onclick="handleLogin()">Login</button>
+                <div class="link" onclick="showScreen('welcome')">Back to Welcome</div>
+            </div>
+
+            <!-- Register Screen -->
+            <div id="register" class="screen">
+                <div class="title">Register</div>
+                <input type="text" class="input" placeholder="Full Name" id="registerName">
+                <input type="tel" class="input" placeholder="Phone Number" id="registerPhone">
+                <input type="password" class="input" placeholder="Password" id="registerPassword">
+                <button class="button" onclick="handleRegister()">Register</button>
+                <div class="link" onclick="showScreen('welcome')">Back to Welcome</div>
+            </div>
+
+            <!-- Home Screen -->
+            <div id="home" class="screen">
+                <div class="title">Welcome to Trashify!</div>
+                <div class="subtitle">What would you like to do?</div>
+                
+                <div class="menu-button" onclick="showFeature('Book Pickup')">
+                    <div class="menu-button-text">📦 Book Pickup</div>
+                </div>
+                
+                <div class="menu-button" onclick="showFeature('My Bookings')">
+                    <div class="menu-button-text">📋 My Bookings</div>
+                </div>
+                
+                <div class="menu-button" onclick="showFeature('Profile')">
+                    <div class="menu-button-text">👤 Profile</div>
+                </div>
+                
+                <div class="menu-button" onclick="showFeature('Earnings')">
+                    <div class="menu-button-text">💰 Earnings</div>
+                </div>
+                
+                <button class="button logout" onclick="showScreen('welcome')">Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showScreen(screenId) {
+            // Hide all screens
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+            
+            // Show selected screen
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        function handleLogin() {
+            const phone = document.getElementById('loginPhone').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            if (phone && password) {
+                alert('Login successful! (This is a demo)');
+                showScreen('home');
+            } else {
+                alert('Please fill in all fields');
+            }
+        }
+
+        function handleRegister() {
+            const name = document.getElementById('registerName').value;
+            const phone = document.getElementById('registerPhone').value;
+            const password = document.getElementById('registerPassword').value;
+            
+            if (name && phone && password) {
+                alert('Registration successful! (This is a demo)');
+                showScreen('home');
+            } else {
+                alert('Please fill in all fields');
+            }
+        }
+
+        function showFeature(featureName) {
+            alert(`${featureName} - Coming Soon!`);
+        }
+
+        // Add some demo data
+        document.getElementById('loginPhone').value = '9876543210';
+        document.getElementById('loginPassword').value = 'password123';
+        document.getElementById('registerName').value = 'Test User';
+        document.getElementById('registerPhone').value = '9999999999';
+        document.getElementById('registerPassword').value = 'password123';
+    </script>
+</body>
+</html>
